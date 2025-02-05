@@ -118,8 +118,8 @@ if __name__ == '__main__':
 
     args = {k.replace('--', '') : v for k, v in args.items()}
     sub_args = {k.replace('--', '') : v for k, v in sub_args.items()}
-    if args['model_path'] == None:
-        raise Exception('A model path must be supplied as an argument with --model_path.')
+    # if args['model_path'] == None:
+    #     raise Exception('A model path must be supplied as an argument with --model_path.')
 
     nr_types = int(args['nr_types']) if int(args['nr_types']) > 0 else None
     method_args = {

@@ -6,9 +6,9 @@ Patch extraction script.
 import re
 import glob
 import os
-import tqdm
+from tqdm import tqdm
 import pathlib
-
+import openslide
 import numpy as np
 
 from misc.patch_extractor import PatchExtractor
@@ -16,85 +16,72 @@ from misc.utils import rm_n_mkdir
 
 from dataset import get_dataset
 
+def load_svs_image(svs_path, level=0):
+    """
+    讀取 SVS 檔案，返回指定層級的影像 NumPy 陣列。
+    :param svs_path: SVS 檔案路徑
+    :param level: 要讀取的層次（0 表示最高分辨率）
+    :return: NumPy 陣列格式的影像
+    """
+    slide = openslide.OpenSlide(svs_path)
+    width, height = slide.level_dimensions[level]
+    pil_image = slide.read_region((0, 0), level, (width, height)).convert("RGB")
+    return np.array(pil_image)
+
+def extract_patches(image, win_size, step_size):
+    """
+    根據指定的窗口大小和步長，從影像中切出所有補丁。
+    :param image: 輸入的 NumPy 影像陣列
+    :param win_size: 補丁大小 [高度, 寬度]
+    :param step_size: 步長大小 [高度, 寬度]
+    :return: 補丁列表
+    """
+    h, w, c = image.shape
+    patch_height, patch_width = win_size
+    step_height, step_width = step_size
+
+    patches = []
+    print("Extracting patches...")
+    for y in tqdm(range(0, h - patch_height + 1, step_height), desc="Rows", position=0):
+        for x in tqdm(range(0, w - patch_width + 1, step_width), desc="Cols", position=1, leave=False):
+            patch = image[y:y+patch_height, x:x+patch_width, :]
+            patches.append(patch)
+    return patches
+
+def save_patches_as_npy(patches, save_dir, base_name):
+    """
+    將補丁保存為 .npy 檔案。
+    :param patches: 補丁列表
+    :param save_dir: 保存目錄
+    :param base_name: 檔案基本名稱
+    """
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+
+    print("Saving patches...")
+    for idx, patch in tqdm(enumerate(patches), total=len(patches), desc="Saving Patches"):
+        save_path = os.path.join(save_dir, f"{base_name}_{idx:03d}.npy")
+        np.save(save_path, patch)
+    print(f"Saved {len(patches)} patches to {save_dir}")
+
 # -------------------------------------------------------------------------------------
 if __name__ == "__main__":
 
-    # Determines whether to extract type map (only applicable to datasets with class labels).
-    type_classification = True
+    svs_path = "/data1/johnny99457/DATASETS/TCGA/TEST/TCGA-49-4505-01Z-00-DX4.623c4278-fc3e-4c80-bb4d-000e24fbb1c2.svs"  # 替換為您的 WSI 檔案路徑
+    save_dir = "/data1/johnny99457/hover_net/dataset/TCGA-49-4505-01Z-00-DX4_patches_40x"  # 替換為保存補丁的目錄
+    win_size = [270, 270]  # 補丁大小 (高度, 寬度)
+    step_size = [270, 270]  # 步長 (高度, 寬度)
+    level = 0  # WSI 層級（0 表示最高解析度）
 
-    win_size = [540, 540]
-    step_size = [164, 164]
-    extract_type = "mirror"  # Choose 'mirror' or 'valid'. 'mirror'- use padding at borders. 'valid'- only extract from valid regions.
+    # 讀取影像
+    print("Loading WSI image...")
+    image = load_svs_image(svs_path, level=level)
+    print(f"WSI image loaded with shape: {image.shape}")
 
-    # Name of dataset - use Kumar, CPM17 or CoNSeP.
-    # This used to get the specific dataset img and ann loading scheme from dataset.py
-    dataset_name = "consep"
-    save_root = "dataset/training_data/%s/" % dataset_name
+    # 提取補丁
+    patches = extract_patches(image, win_size, step_size)
+    print(f"Extracted {len(patches)} patches.")
 
-    # a dictionary to specify where the dataset path should be
-    dataset_info = {
-        "train": {
-            "img": (".png", "dataset/CoNSeP/Train/Images/"),
-            "ann": (".mat", "dataset/CoNSeP/Train/Labels/"),
-        },
-        "valid": {
-            "img": (".png", "dataset/CoNSeP/Test/Images/"),
-            "ann": (".mat", "dataset/CoNSeP/Test/Labels/"),
-        },
-    }
-
-    patterning = lambda x: re.sub("([\[\]])", "[\\1]", x)
-    parser = get_dataset(dataset_name)
-    xtractor = PatchExtractor(win_size, step_size)
-    for split_name, split_desc in dataset_info.items():
-        img_ext, img_dir = split_desc["img"]
-        ann_ext, ann_dir = split_desc["ann"]
-
-        out_dir = "%s/%s/%s/%dx%d_%dx%d/" % (
-            save_root,
-            dataset_name,
-            split_name,
-            win_size[0],
-            win_size[1],
-            step_size[0],
-            step_size[1],
-        )
-        file_list = glob.glob(patterning("%s/*%s" % (ann_dir, ann_ext)))
-        file_list.sort()  # ensure same ordering across platform
-
-        rm_n_mkdir(out_dir)
-
-        pbar_format = "Process File: |{bar}| {n_fmt}/{total_fmt}[{elapsed}<{remaining},{rate_fmt}]"
-        pbarx = tqdm.tqdm(
-            total=len(file_list), bar_format=pbar_format, ascii=True, position=0
-        )
-
-        for file_idx, file_path in enumerate(file_list):
-            base_name = pathlib.Path(file_path).stem
-
-            img = parser.load_img("%s/%s%s" % (img_dir, base_name, img_ext))
-            ann = parser.load_ann(
-                "%s/%s%s" % (ann_dir, base_name, ann_ext), type_classification
-            )
-
-            # *
-            img = np.concatenate([img, ann], axis=-1)
-            sub_patches = xtractor.extract(img, extract_type)
-
-            pbar_format = "Extracting  : |{bar}| {n_fmt}/{total_fmt}[{elapsed}<{remaining},{rate_fmt}]"
-            pbar = tqdm.tqdm(
-                total=len(sub_patches),
-                leave=False,
-                bar_format=pbar_format,
-                ascii=True,
-                position=1,
-            )
-
-            for idx, patch in enumerate(sub_patches):
-                np.save("{0}/{1}_{2:03d}.npy".format(out_dir, base_name, idx), patch)
-                pbar.update()
-            pbar.close()
-            # *
-
-            pbarx.update()
-        pbarx.close()
+    # 保存補丁為 .npy
+    base_name = os.path.splitext(os.path.basename(svs_path))[0]  # 獲取檔案名稱
+    save_patches_as_npy(patches, save_dir, base_name)

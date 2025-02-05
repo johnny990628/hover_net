@@ -253,9 +253,11 @@ class InferManager(base.InferManager):
             cache_image_info_list = []
             while len(file_path_list) > 0:
                 file_path = file_path_list.pop(0)
-
-                img = cv2.imread(file_path)
-                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                
+                # img = cv2.imread(file_path)
+                # img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                # src_shape = img.shape
+                img = np.load(file_path)
                 src_shape = img.shape
 
                 img, patch_info, top_corner = _prepare_patching(
